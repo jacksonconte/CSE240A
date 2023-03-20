@@ -75,7 +75,13 @@ init_predictor()
   } 
 
   // initalizes structures for Tournament
-  else if (bpType == TOURNAMENT) {
+  else if (bpType == TOURNAMENT || bpType == CUSTOM) {
+    // TWEAK CUSTOM NUMBERS HERE
+    if (bpType == CUSTOM) {
+      pcIndexBits = 10;
+      ghistoryBits = 10;
+      lhistoryBits = 10;
+    }
     // TODO: check bit #s
     uint32_t numGPredictors = 1 << ghistoryBits;
     gPredictors = malloc(numGPredictors / 4);
@@ -93,11 +99,13 @@ init_predictor()
 
     for(uint32_t i = 0; i < numGPredictors / 4; i++) gPredictors[i] = SN;
     for(uint32_t i = 0; i < numGPredictors / 4; i++) cPredictors[i] = SN;
-    for(uint32_t i = 0; i < numLPredictors / 4; i++) lPredictors[i] = SN;
+    // weakly select global predictor
+    for(uint32_t i = 0; i < numLPredictors / 4; i++) lPredictors[i] = 2;
   }
   
   // initalizes structures for Custom
   else if (bpType == CUSTOM) {
+    
     
   }
 
@@ -149,7 +157,8 @@ make_prediction(uint32_t pc)
     if (state > 1) return TAKEN;
     else return NOTTAKEN;
   }
-  else if(bpType == TOURNAMENT) {
+  else if(bpType == TOURNAMENT || bpType == CUSTOM) {
+    
     // mask by index bits
     uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
@@ -158,7 +167,8 @@ make_prediction(uint32_t pc)
     uint16_t localPred = *localHist & ( (1 << lhistoryBits) - 1);
     
     last_local = get_predictor(lPredictors, localPred);
-    last_global = get_predictor(gPredictors, ghrBits);
+    last_global = get_predictor(gPredictors, 
+      (bpType == CUSTOM)? ghrBits^pcBits : ghrBits);
     uint8_t choice = get_predictor(cPredictors, ghrBits);
     
     // local
@@ -169,6 +179,7 @@ make_prediction(uint32_t pc)
     }
   }
   else if(bpType == CUSTOM) {
+
     return TAKEN;
   } 
   else {
@@ -210,7 +221,7 @@ train_predictor(uint32_t pc, uint8_t outcome)
 
   }
   // Start Tournament training
-  else if (bpType == TOURNAMENT) {
+  else if (bpType == TOURNAMENT || bpType == CUSTOM) {
     
     uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
@@ -239,12 +250,13 @@ train_predictor(uint32_t pc, uint8_t outcome)
     *localHist += outcome;
 
     // update global prediction
-    previous = get_predictor(gPredictors, ghrBits);
+    uint32_t ind = (bpType == CUSTOM)? ghrBits ^ pcBits : ghrBits;
+    previous = get_predictor(gPredictors, ind);
 
     if (outcome && previous < 3) {
-        set_predictor(gPredictors, ghrBits, previous+1);
+        set_predictor(gPredictors, ind, previous+1);
     } else if(previous > 0) {
-        set_predictor(gPredictors, ghrBits, previous-1);
+        set_predictor(gPredictors, ind, previous-1);
     }
     
     // update choice prediction if global and local differ
