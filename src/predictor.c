@@ -33,13 +33,14 @@ int verbose;
 //      Predictor Data Structures     //
 //------------------------------------//
 
-//
-//TODO: Add your own Branch Predictor data structures here
-//
 uint8_t* gPredictors;
-uint8_t* ghr;
+uint8_t* lPredictors;
+uint8_t* cPredictors; // choice predictions
+uint16_t* lHistory;
 
 
+uint32_t ghr = 0;
+uint32_t numPredictors;
 
 //------------------------------------//
 //        Predictor Functions         //
@@ -50,30 +51,66 @@ uint8_t* ghr;
 void
 init_predictor()
 {
-  // printf("bit sad init\n");
-  ghistoryBits = 8;
-  pcIndexBits = ghistoryBits;
-  int numPredictors = 1 << ghistoryBits; // 2^8 = 256
-  // printf("%d\n", numPredictors);
-  gPredictors = malloc(numPredictors / 4); // 256 / 4 = 64 bytes
-  ghr = malloc(ghistoryBits / 8); // 8/8 = 1
+  printf("========= %s =========\n", bpName[bpType]);
+  // initalizes structures for static
+  if (bpType == STATIC) {
+    return;
+  }
+  // initializes structures for GShare
+  if (bpType == GSHARE) {
+    if (ghistoryBits > 31) {
+      fprintf(stderr, "ERROR: most bits supported for gshare is 31\n");
+      exit(1);
+    }
+    pcIndexBits = ghistoryBits;
+    numPredictors = 1 << ghistoryBits;
+    printf("# predictors = %u\n\n", numPredictors);
+
+    gPredictors = malloc(numPredictors / 4); // freed on exit lmao
+
+    // initialize all to strongly not taken
+    for(uint32_t i = 0; i < numPredictors / 4; i++) gPredictors[i] = SN;
+  } 
+
+  // initalizes structures for Tournament
+  else if (bpType == TOURNAMENT) {
+    // TODO: check bit #s
+    uint32_t numGPredictors = 1 << ghistoryBits;
+    gPredictors = malloc(numGPredictors / 4);
+    uint32_t numCPredictors = 1 << ghistoryBits;
+    cPredictors = malloc(numGPredictors / 4);
+    uint32_t numLPredictors = 1 << lhistoryBits;
+    lPredictors = malloc(numLPredictors / 4);
+
+    for(uint32_t i = 0; i < numGPredictors / 4; i++) gPredictors[i] = SN;
+    for(uint32_t i = 0; i < numGPredictors / 4; i++) cPredictors[i] = SN;
+    for(uint32_t i = 0; i < numLPredictors / 4; i++) lPredictors[i] = SN;
+  }
   
-  // initialize all to strongly not taken
-  for(int i = 0; i < numPredictors / 4; i++) gPredictors[i] = SN;
+  // initalizes structures for Custom
+  else if (bpType == CUSTOM) {
+    
+  }
+
+  else {
+    fprintf(stderr, "shit's fucked bro\n");
+    exit(1);
+  }
 
 }
-
+// helper function
 uint8_t
-get_gpredictor(int i)
+get_predictor(uint32_t i)
 {
   uint8_t fourPredictors = gPredictors[i / 4];
   uint8_t ind = i % 4;
-  // chop off last two bits
+  // only return last two bits
   return ( fourPredictors >> (2 * ind) ) & 0b11;
 }
+// helper function
 // 0 <= state <= 3
 void
-set_gpredictor(int i, uint8_t state)
+set_predictor(uint32_t i, uint8_t state)
 {
   uint8_t fourPredictors = gPredictors[i / 4];
   uint8_t ind = i % 4; // 0-3
@@ -89,30 +126,40 @@ set_gpredictor(int i, uint8_t state)
 //
 uint8_t
 make_prediction(uint32_t pc)
-{
-  //
-  //TODO: Implement prediction scheme
-  //
+{ 
+  if(bpType == STATIC) {
+    return TAKEN;
+  }
+  else if(bpType == GSHARE) {
+    // mask by index bits
+    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
+    uint32_t ind = pcBits ^ ghrBits;
+    uint8_t state = get_predictor(ind);
 
-  uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
-  uint32_t ghrBits = *ghr;
-  uint32_t ind = pcBits ^ ghrBits;
-  uint8_t state = get_gpredictor(ind);
-
-  // Make a prediction based on the bpType
-  switch (bpType) {
-    case STATIC:
-      return TAKEN;
-    case GSHARE:
-      // get last n bits, n = pcIndexBits
-      if (state > 1) return TAKEN;
-      else return NOTTAKEN;
-    case TOURNAMENT:
-      return TAKEN;
-    case CUSTOM:
-      return TAKEN;
-    default:
-      break;
+    if (state > 1) return TAKEN;
+    else return NOTTAKEN;
+  }
+  else if(bpType == TOURNAMENT) {
+    // mask by index bits
+    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
+    uint32_t lhBits = ghr & ( (1 << lhistoryBits) - 1);
+    
+    uint8_t choice = get_predictor(ghrBits);
+    // local
+    if (choice < 2) {
+      return (get_predictor(lhBits) > WN); // return 1 if taken
+    } else { // global
+      return (get_predictor(ghrBits) > WN);
+    }
+  }
+  else if(bpType == CUSTOM) {
+    return TAKEN;
+  } 
+  else {
+    fprintf(stderr, "damn it\n");
+    exit(1);
   }
 
   // If there is not a compatable bpType then return NOTTAKEN
@@ -126,21 +173,52 @@ make_prediction(uint32_t pc)
 void
 train_predictor(uint32_t pc, uint8_t outcome)
 {
-  //
-  //TODO: Implement Predictor training for others
-  //
-
-  *ghr = (*ghr << 1) + outcome;
-
-  uint8_t location = ((*ghr)^pc);
-  uint8_t previous = get_gpredictor(location);
-  if (outcome) {// if outcome is true just add 1 unless its already value 11
-    if(previous < 3)
-      set_gpredictor(location, previous+1);
+  if (bpType == STATIC) {
+    return;
   } 
-  else {
-    if(previous > 0)
-      set_gpredictor(location, previous-1);
+  else if (bpType == GSHARE) {
+    ghr<<=1;
+    ghr += outcome;
+
+    // Add masking to the pcBits and ghrbits
+    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
+    uint32_t location = ghrBits^pcBits;
+    uint8_t previous = get_predictor(location);
+    if (outcome && previous < 3) {
+        set_predictor(location, previous+1);
+    }
+    else if(previous > 0) {
+        set_predictor(location, previous-1);
+    }
   }
-  
+  // Start Tournament training
+  else if (bpType == TOURNAMENT) {
+    ghr <<= 1;
+    ghr += outcome;
+
+    
+
+    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
+    uint32_t lhBits = ghr & ( (1 << lhistoryBits) - 1);
+
+    // update local history table
+    // lPredictors[lhBits]
+
+    if (outcome && previous < 3) {
+        set_predictor(location, previous+1);
+    }
+    else if(previous > 0) {
+        set_predictor(location, previous-1);
+    }
+  }
+  // Start custom training
+  else if (bpType == CUSTOM) {
+
+  }
+  else {
+    fprintf(stderr, "cant blame us\n");
+    exit(1);
+  }
 }
