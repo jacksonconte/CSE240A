@@ -59,9 +59,9 @@ p = 13 - log n
 */
 
 // ADJUST PERCEPTRON CONSTANTS HERE
-#define P_WEIGHTS 4 // x on graph, also # of ghr bits
-#define P_PCBITS 11 // y on graph
-#define THRESH 127 // theta threshold
+#define P_WEIGHTS 7 // x on graph, also # of ghr bits
+#define P_PCBITS 10 // y on graph
+#define THRESH 64 // theta threshold
 
 int8_t ptrons[1 << P_PCBITS][P_WEIGHTS];
 int32_t y_out = 0; 
@@ -135,9 +135,12 @@ void init_predictor()
   // initalizes structures for Custom
   else if (bpType == CUSTOM)
   {
+    uint32_t numGPredictors = 1 << P_PCBITS;
+    gPredictors = malloc (numGPredictors / 4);
+    cPredictors = malloc (numGPredictors / 4);
     pcIndexBits = P_PCBITS; // use these vars var for consistency in other funcs
     ghistoryBits = P_WEIGHTS;
-    uint32_t p_rows = 1 << pcIndexBits;
+    uint32_t p_rows = numGPredictors;
 
     // initialize perceptron weights to 0
     for (int i = 0; i < p_rows; i++)
@@ -147,7 +150,10 @@ void init_predictor()
         ptrons[i][j] = 0;
       }
     }
-    ghistoryBits = P_WEIGHTS;
+
+    // intialize gshare predictors to strongly not taken
+    for (uint32_t i = 0; i < numGPredictors / 4; i++)
+      gPredictors[i] = SN;
   }
 
   else
@@ -156,7 +162,21 @@ void init_predictor()
     exit(1);
   }
 }
-// helper function
+// helper functions for perceptron
+uint32_t
+xor_hash(uint32_t pc, uint32_t ghr)
+{
+  return pc ^ ghr;
+}
+uint32_t
+mid_sq_hash(uint32_t pc, uint32_t ghr)
+{
+  uint32_t hash = pc ^ ghr;
+  hash *= hash;
+  // hash %= (1 << );
+}
+
+// helper functions for gshare and tournament
 uint8_t
 get_predictor(uint8_t *array, uint32_t i)
 {
@@ -165,7 +185,6 @@ get_predictor(uint8_t *array, uint32_t i)
   // only return last two bits
   return (fourPredictors >> (2 * ind)) & 0b11;
 }
-// helper function
 // 0 <= state <= 3
 void set_predictor(uint8_t *array, uint32_t i, uint8_t state)
 {
@@ -226,8 +245,8 @@ make_prediction(uint32_t pc)
   }
   else if (bpType == CUSTOM)
   {
+    // 
     // select entry in perceptron table
-
     // xor with GHR
     // mask by index bits
     uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
@@ -243,7 +262,14 @@ make_prediction(uint32_t pc)
       result += ptron[i] * (taken ? 1 : -1); //* (1 << i)
     }
     y_out = result;
+
+    last_global = get_predictor(gPredictors, ghrBits);
+    uint8_t choice = get_predictor(cPredictors, ghrBits);
+    if (choice < 2)
+      
+    
     return (result > 0); // defaults to not taken on tie
+    
   }
   else
   {
@@ -356,10 +382,9 @@ void train_predictor(uint32_t pc, uint8_t outcome)
     ghr += outcome;
   }
 
-  // Start perceptron training
   else if (bpType == CUSTOM)
   {
-    // if t == 1
+    // TRAIN PERCEPTRON
     uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
     pcBits ^= ghrBits;
