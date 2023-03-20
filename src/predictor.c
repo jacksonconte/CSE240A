@@ -59,8 +59,8 @@ p = 13 - log n
 */
 
 // ADJUST PERCEPTRON CONSTANTS HERE
-#define P_WEIGHTS 4 // x on graph, also # of ghr bits
-#define P_PCBITS 11 // y on graph
+#define P_WEIGHTS 7 // x on graph, also # of ghr bits
+#define P_PCBITS 10 // y on graph
 #define THRESH 127 // theta threshold
 
 int8_t ptrons[1 << P_PCBITS][P_WEIGHTS];
@@ -373,11 +373,10 @@ void train_predictor(uint32_t pc, uint8_t outcome)
         uint8_t t = (outcome == TAKEN)? 1 : -1;
         ptrons[pcBits][i] += (t * x_i);
       }
-
-      // update GHR
-      ghr <<= 1;
-      ghr += outcome;
     }
+    // update GHR
+    ghr <<= 1;
+    ghr += outcome;
   }
   else
   {
