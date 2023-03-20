@@ -34,10 +34,12 @@ int verbose;
 //------------------------------------//
 
 uint8_t* gPredictors;
-uint8_t* lPredictors;
+uint8_t* lPredictors; // local prediction
 uint8_t* cPredictors; // choice predictions
-uint16_t* lHistory;
+uint16_t* lHistory; // local history table or PHT
 
+uint8_t last_local = SN;
+uint8_t last_global = SN;
 
 uint32_t ghr = 0;
 uint32_t numPredictors;
@@ -77,10 +79,17 @@ init_predictor()
     // TODO: check bit #s
     uint32_t numGPredictors = 1 << ghistoryBits;
     gPredictors = malloc(numGPredictors / 4);
+
     uint32_t numCPredictors = 1 << ghistoryBits;
     cPredictors = malloc(numGPredictors / 4);
+
     uint32_t numLPredictors = 1 << lhistoryBits;
     lPredictors = malloc(numLPredictors / 4);
+    printf("lHistoryBits: %d\n",lhistoryBits);
+    
+    // 2^pc index bits
+    uint32_t numLHistory = 1 << pcIndexBits;
+    lHistory = malloc(numLHistory * 2); // assume max. 16 bits of history for now
 
     for(uint32_t i = 0; i < numGPredictors / 4; i++) gPredictors[i] = SN;
     for(uint32_t i = 0; i < numGPredictors / 4; i++) cPredictors[i] = SN;
@@ -100,9 +109,9 @@ init_predictor()
 }
 // helper function
 uint8_t
-get_predictor(uint32_t i)
+get_predictor(uint8_t * array, uint32_t i)
 {
-  uint8_t fourPredictors = gPredictors[i / 4];
+  uint8_t fourPredictors = array[i / 4];
   uint8_t ind = i % 4;
   // only return last two bits
   return ( fourPredictors >> (2 * ind) ) & 0b11;
@@ -110,14 +119,14 @@ get_predictor(uint32_t i)
 // helper function
 // 0 <= state <= 3
 void
-set_predictor(uint32_t i, uint8_t state)
+set_predictor(uint8_t * array, uint32_t i, uint8_t state)
 {
-  uint8_t fourPredictors = gPredictors[i / 4];
+  uint8_t fourPredictors = array[i / 4];
   uint8_t ind = i % 4; // 0-3
   uint8_t mask = ~( 0b11 << (2*ind) ); // 2*ind = 4; mask = 11001111
   fourPredictors &= mask;
   fourPredictors |= ( state << (2*ind) ); // 11 00 11 11 | 00 01 00 00
-  gPredictors[i / 4] = fourPredictors; // it just works(tm)
+  array[i / 4] = fourPredictors; // it just works(tm)
 }
 
 // Make a prediction for conditional branch instruction at PC 'pc'
@@ -135,7 +144,7 @@ make_prediction(uint32_t pc)
     uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
     uint32_t ind = pcBits ^ ghrBits;
-    uint8_t state = get_predictor(ind);
+    uint8_t state = get_predictor(gPredictors, ind);
 
     if (state > 1) return TAKEN;
     else return NOTTAKEN;
@@ -144,14 +153,19 @@ make_prediction(uint32_t pc)
     // mask by index bits
     uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
-    uint32_t lhBits = ghr & ( (1 << lhistoryBits) - 1);
+        
+    uint16_t* localHist = &(lHistory[pcBits]);
+    uint16_t localPred = *localHist & ( (1 << lhistoryBits) - 1);
     
-    uint8_t choice = get_predictor(ghrBits);
+    last_local = get_predictor(lPredictors, localPred);
+    last_global = get_predictor(gPredictors, ghrBits);
+    uint8_t choice = get_predictor(cPredictors, ghrBits);
+    
     // local
     if (choice < 2) {
-      return (get_predictor(lhBits) > WN); // return 1 if taken
+      return (last_local > WN); // return 1 if taken
     } else { // global
-      return (get_predictor(ghrBits) > WN);
+      return (last_global > WN);
     }
   }
   else if(bpType == CUSTOM) {
@@ -177,41 +191,81 @@ train_predictor(uint32_t pc, uint8_t outcome)
     return;
   } 
   else if (bpType == GSHARE) {
-    ghr<<=1;
-    ghr += outcome;
-
+    
     // Add masking to the pcBits and ghrbits
     uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
     uint32_t location = ghrBits^pcBits;
-    uint8_t previous = get_predictor(location);
+    uint8_t previous = get_predictor(gPredictors, location);
     if (outcome && previous < 3) {
-        set_predictor(location, previous+1);
+        set_predictor(gPredictors, location, previous+1);
     }
     else if(previous > 0) {
-        set_predictor(location, previous-1);
+        set_predictor(gPredictors, location, previous-1);
     }
+
+    // used to be before counter updates
+    ghr<<=1;
+    ghr += outcome;
+
   }
   // Start Tournament training
   else if (bpType == TOURNAMENT) {
-    ghr <<= 1;
-    ghr += outcome;
-
     
-
     uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
     uint32_t lhBits = ghr & ( (1 << lhistoryBits) - 1);
 
-    // update local history table
-    // lPredictors[lhBits]
+    // pc -> pattern -> 2-bit counter
+    /*
+    ====================
+    pc 0 -> TNTTTN(?) -> WN
+    pc 1 -> NTNTNT(?) -> ST
+    pc 2 -> TTTNNT(?) -> WT
+    */
+
+    // update local prediction
+    uint16_t* localHist = &(lHistory[pcBits]);
+    uint16_t localPred = *localHist & ( (1 << lhistoryBits) - 1);
+    uint8_t previous = get_predictor(lPredictors, localPred);
+    if (outcome && previous < 3) {
+      set_predictor(lPredictors, localPred, previous+1);
+    } else if(previous > 0) {
+      set_predictor(lPredictors, localPred, previous-1);
+    }
+
+    // update local history (PHT)
+    *localHist<<=1;
+    *localHist += outcome;
+
+    // update global prediction
+    previous = get_predictor(gPredictors, ghrBits);
 
     if (outcome && previous < 3) {
-        set_predictor(location, previous+1);
+        set_predictor(gPredictors, ghrBits, previous+1);
+    } else if(previous > 0) {
+        set_predictor(gPredictors, ghrBits, previous-1);
     }
-    else if(previous > 0) {
-        set_predictor(location, previous-1);
+    
+    // update choice prediction if global and local differ
+
+    // reduce to T and NT
+    uint8_t local_taken = (last_local > WN);
+    uint8_t global_taken = (last_global > WN);
+
+    if (local_taken != global_taken) {
+      previous = get_predictor(cPredictors, ghrBits);
+      // if local was right, try to decrement
+      if (outcome == local_taken && previous > 0) {
+        set_predictor(cPredictors, ghrBits, previous-1);
+      // otherwise global was right, try to increment
+      } else if (previous < 3) { 
+        set_predictor(cPredictors, ghrBits, previous+1);
+      }
     }
+    // update GHR
+    ghr <<= 1;
+    ghr += outcome;
   }
   // Start custom training
   else if (bpType == CUSTOM) {
