@@ -59,8 +59,8 @@ p = 13 - log n
 */
 
 // ADJUST PERCEPTRON CONSTANTS HERE
-#define P_WEIGHTS 8 // x on graph, also # of ghr bits
-#define P_PCBITS 10 // y on graph
+#define P_WEIGHTS 4 // x on graph, also # of ghr bits
+#define P_PCBITS 11 // y on graph
 #define THRESH 127 // theta threshold
 
 int8_t ptrons[1 << P_PCBITS][P_WEIGHTS];
@@ -227,14 +227,15 @@ make_prediction(uint32_t pc)
   else if (bpType == CUSTOM)
   {
     // select entry in perceptron table
-    // TODO: hash PC?
 
+    // xor with GHR
     // mask by index bits
     uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+    pcBits ^= ghrBits;
 
     int8_t* ptron = ptrons[pcBits];
     int32_t result = ptron[0];
-    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
 
     for (int i = 1; i < P_WEIGHTS; i++)
     {
@@ -360,6 +361,8 @@ void train_predictor(uint32_t pc, uint8_t outcome)
   {
     // if t == 1
     uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+    pcBits ^= ghrBits;
 
     uint8_t sign_y_out = (y_out > 0);
     if (sign_y_out != outcome || abs(y_out) <= THRESH)
