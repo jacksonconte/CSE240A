@@ -12,16 +12,16 @@
 // TODO:Student Information
 //
 const char *studentName = "NAME";
-const char *studentID   = "PID";
-const char *email       = "EMAIL";
+const char *studentID = "PID";
+const char *email = "EMAIL";
 
 //------------------------------------//
 //      Predictor Configuration       //
 //------------------------------------//
 
 // Handy Global for use in output routines
-const char *bpName[4] = { "Static", "Gshare",
-                          "Tournament", "Custom" };
+const char *bpName[4] = {"Static", "Gshare",
+                         "Tournament", "Custom"};
 
 int ghistoryBits; // Number of bits used for Global History
 int lhistoryBits; // Number of bits used for Local History
@@ -33,10 +33,38 @@ int verbose;
 //      Predictor Data Structures     //
 //------------------------------------//
 
-uint8_t* gPredictors;
-uint8_t* lPredictors; // local prediction
-uint8_t* cPredictors; // choice predictions
-uint16_t* lHistory; // local history table or PHT
+uint8_t *gPredictors;
+uint8_t *lPredictors; // local prediction
+uint8_t *cPredictors; // choice predictions
+uint16_t *lHistory;   // local history table or PHT
+
+/*
+
+p = pc bits, n = weights
+
+each perceptron: [w0...wn]
+each weight needs to be signed char from -128 to 127?
+n = 8 -> 8 signed chars per perceptron
+GHR needs to be n bits for dot product to work
+
+# of perceptrons = 2^p where p = pc bits
+
+2^p * n * 8 bits = 64 kbits
+2^p * n = 8 kbits
+2^p = 2^13 / n
+
+log 2^p = log(2^13 / n)
+p = log(2^13) - log n
+p = 13 - log n
+*/
+
+// ADJUST PERCEPTRON CONSTANTS HERE
+#define P_WEIGHTS 8 // x on graph, also # of ghr bits
+#define P_PCBITS 10 // y on graph
+#define THRESH 127 // theta threshold
+
+int8_t ptrons[1 << P_PCBITS][P_WEIGHTS];
+int32_t y_out = 0; 
 
 uint8_t last_local = SN;
 uint8_t last_global = SN;
@@ -50,17 +78,19 @@ uint32_t numPredictors;
 
 // Initialize the predictor
 //
-void
-init_predictor()
+void init_predictor()
 {
   printf("========= %s =========\n", bpName[bpType]);
   // initalizes structures for static
-  if (bpType == STATIC) {
+  if (bpType == STATIC)
+  {
     return;
   }
   // initializes structures for GShare
-  if (bpType == GSHARE) {
-    if (ghistoryBits > 31) {
+  if (bpType == GSHARE)
+  {
+    if (ghistoryBits > 31)
+    {
       fprintf(stderr, "ERROR: most bits supported for gshare is 31\n");
       exit(1);
     }
@@ -71,11 +101,13 @@ init_predictor()
     gPredictors = malloc(numPredictors / 4); // freed on exit lmao
 
     // initialize all to strongly not taken
-    for(uint32_t i = 0; i < numPredictors / 4; i++) gPredictors[i] = SN;
-  } 
+    for (uint32_t i = 0; i < numPredictors / 4; i++)
+      gPredictors[i] = SN;
+  }
 
   // initalizes structures for Tournament
-  else if (bpType == TOURNAMENT) {
+  else if (bpType == TOURNAMENT)
+  {
     // TODO: check bit #s
     uint32_t numGPredictors = 1 << ghistoryBits;
     gPredictors = malloc(numGPredictors / 4);
@@ -85,48 +117,64 @@ init_predictor()
 
     uint32_t numLPredictors = 1 << lhistoryBits;
     lPredictors = malloc(numLPredictors / 4);
-    printf("lHistoryBits: %d\n",lhistoryBits);
-    
+    printf("lHistoryBits: %d\n", lhistoryBits);
+
     // 2^pc index bits
     uint32_t numLHistory = 1 << pcIndexBits;
     lHistory = malloc(numLHistory * 2); // assume max. 16 bits of history for now
 
-    for(uint32_t i = 0; i < numGPredictors / 4; i++) gPredictors[i] = SN;
-    for(uint32_t i = 0; i < numGPredictors / 4; i++) cPredictors[i] = SN;
-    for(uint32_t i = 0; i < numLPredictors / 4; i++) lPredictors[i] = SN;
-  }
-  
-  // initalizes structures for Custom
-  else if (bpType == CUSTOM) {
-    
+    for (uint32_t i = 0; i < numGPredictors / 4; i++)
+      gPredictors[i] = SN;
+    for (uint32_t i = 0; i < numGPredictors / 4; i++)
+      cPredictors[i] = SN;
+    // initialize to weakly global
+    for (uint32_t i = 0; i < numLPredictors / 4; i++)
+      lPredictors[i] = 2;
   }
 
-  else {
+  // initalizes structures for Custom
+  else if (bpType == CUSTOM)
+  {
+    pcIndexBits = P_PCBITS; // use these vars var for consistency in other funcs
+    ghistoryBits = P_WEIGHTS;
+    uint32_t p_rows = 1 << pcIndexBits;
+
+    // initialize perceptron weights to 0
+    for (int i = 0; i < p_rows; i++)
+    {
+      for (int j = 0; j < P_WEIGHTS; j++)
+      {
+        ptrons[i][j] = 0;
+      }
+    }
+    ghistoryBits = P_WEIGHTS;
+  }
+
+  else
+  {
     fprintf(stderr, "shit's fucked bro\n");
     exit(1);
   }
-
 }
 // helper function
 uint8_t
-get_predictor(uint8_t * array, uint32_t i)
+get_predictor(uint8_t *array, uint32_t i)
 {
   uint8_t fourPredictors = array[i / 4];
   uint8_t ind = i % 4;
   // only return last two bits
-  return ( fourPredictors >> (2 * ind) ) & 0b11;
+  return (fourPredictors >> (2 * ind)) & 0b11;
 }
 // helper function
 // 0 <= state <= 3
-void
-set_predictor(uint8_t * array, uint32_t i, uint8_t state)
+void set_predictor(uint8_t *array, uint32_t i, uint8_t state)
 {
   uint8_t fourPredictors = array[i / 4];
-  uint8_t ind = i % 4; // 0-3
-  uint8_t mask = ~( 0b11 << (2*ind) ); // 2*ind = 4; mask = 11001111
+  uint8_t ind = i % 4;                 // 0-3
+  uint8_t mask = ~(0b11 << (2 * ind)); // 2*ind = 4; mask = 11001111
   fourPredictors &= mask;
-  fourPredictors |= ( state << (2*ind) ); // 11 00 11 11 | 00 01 00 00
-  array[i / 4] = fourPredictors; // it just works(tm)
+  fourPredictors |= (state << (2 * ind)); // 11 00 11 11 | 00 01 00 00
+  array[i / 4] = fourPredictors;          // it just works(tm)
 }
 
 // Make a prediction for conditional branch instruction at PC 'pc'
@@ -135,43 +183,69 @@ set_predictor(uint8_t * array, uint32_t i, uint8_t state)
 //
 uint8_t
 make_prediction(uint32_t pc)
-{ 
-  if(bpType == STATIC) {
+{
+  if (bpType == STATIC)
+  {
     return TAKEN;
   }
-  else if(bpType == GSHARE) {
+  else if (bpType == GSHARE)
+  {
     // mask by index bits
-    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
-    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
     uint32_t ind = pcBits ^ ghrBits;
     uint8_t state = get_predictor(gPredictors, ind);
 
-    if (state > 1) return TAKEN;
-    else return NOTTAKEN;
+    if (state > 1)
+      return TAKEN;
+    else
+      return NOTTAKEN;
   }
-  else if(bpType == TOURNAMENT) {
+  else if (bpType == TOURNAMENT)
+  {
     // mask by index bits
-    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
-    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
-        
-    uint16_t* localHist = &(lHistory[pcBits]);
-    uint16_t localPred = *localHist & ( (1 << lhistoryBits) - 1);
-    
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+
+    uint16_t *localHist = &(lHistory[pcBits]);
+    uint16_t localPred = *localHist & ((1 << lhistoryBits) - 1);
+
     last_local = get_predictor(lPredictors, localPred);
     last_global = get_predictor(gPredictors, ghrBits);
     uint8_t choice = get_predictor(cPredictors, ghrBits);
-    
+
     // local
-    if (choice < 2) {
+    if (choice < 2)
+    {
       return (last_local > WN); // return 1 if taken
-    } else { // global
+    }
+    else
+    { // global
       return (last_global > WN);
     }
   }
-  else if(bpType == CUSTOM) {
-    return TAKEN;
-  } 
-  else {
+  else if (bpType == CUSTOM)
+  {
+    // select entry in perceptron table
+    // TODO: hash PC?
+
+    // mask by index bits
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+
+    int8_t* ptron = ptrons[pcBits];
+    int32_t result = ptron[0];
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+
+    for (int i = 1; i < P_WEIGHTS; i++)
+    {
+      uint8_t taken = (ghrBits >> i) & 1;
+      result += ptron[i] * (taken ? 1 : -1); //* (1 << i)
+    }
+    y_out = result;
+    return (result > 0); // defaults to not taken on tie
+  }
+  else
+  {
     fprintf(stderr, "damn it\n");
     exit(1);
   }
@@ -184,37 +258,40 @@ make_prediction(uint32_t pc)
 // outcome 'outcome' (true indicates that the branch was taken, false
 // indicates that the branch was not taken)
 //
-void
-train_predictor(uint32_t pc, uint8_t outcome)
+void train_predictor(uint32_t pc, uint8_t outcome)
 {
-  if (bpType == STATIC) {
+  if (bpType == STATIC)
+  {
     return;
-  } 
-  else if (bpType == GSHARE) {
-    
+  }
+  else if (bpType == GSHARE)
+  {
+
     // Add masking to the pcBits and ghrbits
-    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
-    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
-    uint32_t location = ghrBits^pcBits;
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+    uint32_t location = ghrBits ^ pcBits;
     uint8_t previous = get_predictor(gPredictors, location);
-    if (outcome && previous < 3) {
-        set_predictor(gPredictors, location, previous+1);
+    if (outcome && previous < 3)
+    {
+      set_predictor(gPredictors, location, previous + 1);
     }
-    else if(previous > 0) {
-        set_predictor(gPredictors, location, previous-1);
+    else if (previous > 0)
+    {
+      set_predictor(gPredictors, location, previous - 1);
     }
 
     // used to be before counter updates
-    ghr<<=1;
+    ghr <<= 1;
     ghr += outcome;
-
   }
   // Start Tournament training
-  else if (bpType == TOURNAMENT) {
-    
-    uint32_t pcBits = pc & ( (1 << pcIndexBits) - 1);
-    uint32_t ghrBits = ghr & ( (1 << ghistoryBits) - 1);
-    uint32_t lhBits = ghr & ( (1 << lhistoryBits) - 1);
+  else if (bpType == TOURNAMENT)
+  {
+
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+    uint32_t lhBits = ghr & ((1 << lhistoryBits) - 1);
 
     // pc -> pattern -> 2-bit counter
     /*
@@ -225,53 +302,82 @@ train_predictor(uint32_t pc, uint8_t outcome)
     */
 
     // update local prediction
-    uint16_t* localHist = &(lHistory[pcBits]);
-    uint16_t localPred = *localHist & ( (1 << lhistoryBits) - 1);
+    uint16_t *localHist = &(lHistory[pcBits]);
+    uint16_t localPred = *localHist & ((1 << lhistoryBits) - 1);
     uint8_t previous = get_predictor(lPredictors, localPred);
-    if (outcome && previous < 3) {
-      set_predictor(lPredictors, localPred, previous+1);
-    } else if(previous > 0) {
-      set_predictor(lPredictors, localPred, previous-1);
+    if (outcome && previous < 3)
+    {
+      set_predictor(lPredictors, localPred, previous + 1);
+    }
+    else if (previous > 0)
+    {
+      set_predictor(lPredictors, localPred, previous - 1);
     }
 
     // update local history (PHT)
-    *localHist<<=1;
+    *localHist <<= 1;
     *localHist += outcome;
 
     // update global prediction
     previous = get_predictor(gPredictors, ghrBits);
 
-    if (outcome && previous < 3) {
-        set_predictor(gPredictors, ghrBits, previous+1);
-    } else if(previous > 0) {
-        set_predictor(gPredictors, ghrBits, previous-1);
+    if (outcome && previous < 3)
+    {
+      set_predictor(gPredictors, ghrBits, previous + 1);
     }
-    
+    else if (previous > 0)
+    {
+      set_predictor(gPredictors, ghrBits, previous - 1);
+    }
+
     // update choice prediction if global and local differ
 
     // reduce to T and NT
     uint8_t local_taken = (last_local > WN);
     uint8_t global_taken = (last_global > WN);
 
-    if (local_taken != global_taken) {
+    if (local_taken != global_taken)
+    {
       previous = get_predictor(cPredictors, ghrBits);
       // if local was right, try to decrement
-      if (outcome == local_taken && previous > 0) {
-        set_predictor(cPredictors, ghrBits, previous-1);
-      // otherwise global was right, try to increment
-      } else if (previous < 3) { 
-        set_predictor(cPredictors, ghrBits, previous+1);
+      if (outcome == local_taken && previous > 0)
+      {
+        set_predictor(cPredictors, ghrBits, previous - 1);
+        // otherwise global was right, try to increment
+      }
+      else if (previous < 3)
+      {
+        set_predictor(cPredictors, ghrBits, previous + 1);
       }
     }
     // update GHR
     ghr <<= 1;
     ghr += outcome;
   }
-  // Start custom training
-  else if (bpType == CUSTOM) {
 
+  // Start perceptron training
+  else if (bpType == CUSTOM)
+  {
+    // if t == 1
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+
+    uint8_t sign_y_out = (y_out > 0);
+    if (sign_y_out != outcome || abs(y_out) <= THRESH)
+     {
+      for (int i = 0; i < P_WEIGHTS; i++)
+      {
+        uint8_t x_i = ((ghr >> i) & 1)? 1 : -1;
+        uint8_t t = (outcome == TAKEN)? 1 : -1;
+        ptrons[pcBits][i] += (t * x_i);
+      }
+
+      // update GHR
+      ghr <<= 1;
+      ghr += outcome;
+    }
   }
-  else {
+  else
+  {
     fprintf(stderr, "cant blame us\n");
     exit(1);
   }
