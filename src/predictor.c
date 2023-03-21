@@ -59,7 +59,7 @@ p = 13 - log n
 */
 
 // ADJUST PERCEPTRON CONSTANTS HERE
-#define P_WEIGHTS 8 // x on graph, also # of ghr bits
+#define P_WEIGHTS 7 // x on graph, also # of ghr bits
 #define P_PCBITS 10 // y on graph
 #define THRESH 127 // theta threshold
 
@@ -73,6 +73,8 @@ uint32_t ghr = 0;
 uint32_t numPredictors;
 uint8_t last_local = SN;
 uint8_t last_global = SN;
+uint8_t perceptronGuess = 1;
+
 
 
 //------------------------------------//
@@ -137,18 +139,26 @@ void init_predictor()
   // initalizes structures for Custom
   else if (bpType == CUSTOM) {
     pcIndexBits = P_PCBITS;
-    ghistoryBits = P_WEIGHTS;
+    ghistoryBits = P_WEIGHTS+2;
+    
+    uint32_t numGPredictors = 1 << ghistoryBits;
+    gPredictors = malloc(numGPredictors / 4);
+
+    uint32_t numCPredictors = 1 << ghistoryBits;
+    cPredictors = malloc(numGPredictors / 4);
+
+    for (uint32_t i = 0; i < numGPredictors / 4; i++)
+      gPredictors[i] = SN;
+    for (uint32_t i = 0; i < numGPredictors / 4; i++)
+      cPredictors[i] = SN;
 
     for (int i = 0; i < (1 << P_PCBITS); i++){
       for (int j = 0; j < P_WEIGHTS; j++) {
         ptrons[0][0] = 0;
       }
     }
-    ghr = 0;
-    
+    ghr = 0;    
   }
-
-
   else
   {
     fprintf(stderr, "shit's fucked bro\n");
@@ -225,11 +235,13 @@ make_prediction(uint32_t pc)
       return (last_global > WN);
     }
   }
+  ///////// make predictron guess
   else if (bpType == CUSTOM) {
     // select entry in perceptron table
     uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
-    pcBits ^= ghrBits; 
+    uint32_t ghrBits2 = ghr & ((1 << (ghistoryBits+2)) - 1);
+    pcBits ^= ghrBits;
 
     y = ptrons[pcBits][0];
     for (int i = 1; i < P_WEIGHTS; i++) {
@@ -239,12 +251,19 @@ make_prediction(uint32_t pc)
         y += ptrons[pcBits][i]*(-1);
       }
     }
-    
     if (y >= 0) {
-      return TAKEN;
+      perceptronGuess = TAKEN;
     } else {
-      return NOTTAKEN;
+      perceptronGuess = NOTTAKEN;
     }
+    last_global = get_predictor(gPredictors, ghrBits2);
+    uint8_t choice = get_predictor(cPredictors, ghrBits2);
+
+    if (choice < 2)
+      return perceptronGuess; // return 1 if taken
+    else
+      return (last_global > WN);
+
   }
   else
   {
@@ -290,7 +309,6 @@ void train_predictor(uint32_t pc, uint8_t outcome)
   // Start Tournament training
   else if (bpType == TOURNAMENT)
   {
-
     uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
     uint32_t lhBits = ghr & ((1 << lhistoryBits) - 1);
@@ -356,11 +374,12 @@ void train_predictor(uint32_t pc, uint8_t outcome)
     ghr <<= 1;
     ghr += outcome;
   }
-  // Start perceptron training
+  /////////// Start perceptron training //////////////
   else if (bpType == CUSTOM) {
     // select entry in perceptron table
     uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+    uint32_t ghrBits2 = ghr & ((1 << (ghistoryBits+2)) - 1);    
     pcBits ^= ghrBits;
 
     // grabs old 
@@ -368,26 +387,46 @@ void train_predictor(uint32_t pc, uint8_t outcome)
 
     if (outcome != y_sign || (abs(y) <= THETA)) {
       if (ptrons[pcBits][0] < abs(THRESH)) {
-        if(outcome == 1) {
-          ptrons[pcBits][0]++;
-        } else {
-          ptrons[pcBits][0]--;
-        }
+        outcome ? ptrons[pcBits][0]++ : ptrons[pcBits][0]--;
       }
 
       for (int i = 1; i < P_WEIGHTS; i++) {
 
         if (ptrons[pcBits][i] < abs(THRESH)) {
           if (((ghr >> i)&1) == 1) {
-            if(outcome == 1) {
-              ptrons[pcBits][i]++;
-            } else {
-              ptrons[pcBits][i]--;
-            }
+            outcome ? ptrons[pcBits][i]++ : ptrons[pcBits][i]--;
           }
         }
       }
 
+    }
+
+    // update global prediction
+    uint8_t previous = get_predictor(gPredictors, ghrBits2);
+
+    if (outcome && previous < 3)
+    {
+      set_predictor(gPredictors, ghrBits2, previous + 1);
+    }
+    else if (previous > 0)
+    {
+      set_predictor(gPredictors, ghrBits2, previous - 1);
+    }
+
+    uint8_t global_taken = (last_global > WN);
+    if (perceptronGuess != global_taken)
+    {
+      previous = get_predictor(cPredictors, ghrBits2);
+      // if local was right, try to decrement
+      if (outcome == perceptronGuess && previous > 0)
+      {
+        set_predictor(cPredictors, ghrBits2, previous - 1);
+        // otherwise global was right, try to increment
+      }
+      else if (previous < 3)
+      {
+        set_predictor(cPredictors, ghrBits2, previous + 1);
+      }
     }
 
     ghr = ghr << 1;
