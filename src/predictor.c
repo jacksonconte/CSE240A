@@ -66,7 +66,13 @@ p = 13 - log n
 int8_t ptrons[1 << P_PCBITS][P_WEIGHTS];
 int y = 0; 
 
+// Threshold values
+#define THETA (P_WEIGHTS * 1.93) + 14
 uint32_t ghr = 0;
+
+uint32_t numPredictors;
+uint8_t last_local = SN;
+uint8_t last_global = SN;
 
 
 //------------------------------------//
@@ -101,7 +107,6 @@ void init_predictor()
     for (uint32_t i = 0; i < numPredictors / 4; i++)
       gPredictors[i] = SN;
   }
-
   // initalizes structures for Tournament
   else if (bpType == TOURNAMENT)
   {
@@ -131,12 +136,18 @@ void init_predictor()
 
   // initalizes structures for Custom
   else if (bpType == CUSTOM) {
+    pcIndexBits = P_PCBITS;
+    ghistoryBits = P_WEIGHTS;
+
     for (int i = 0; i < (1 << P_PCBITS); i++){
       for (int j = 0; j < P_WEIGHTS; j++) {
         ptrons[0][0] = 0;
       }
     }
+    ghr = 0;
+    
   }
+
 
   else
   {
@@ -216,7 +227,24 @@ make_prediction(uint32_t pc)
   }
   else if (bpType == CUSTOM) {
     // select entry in perceptron table
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+    pcBits ^= ghrBits; 
 
+    y = ptrons[pcBits][0];
+    for (int i = 1; i < P_WEIGHTS; i++) {
+      if (((ghr >> i)&1) == 1) {
+        y += ptrons[pcBits][i]*1;
+      } else {
+        y += ptrons[pcBits][i]*(-1);
+      }
+    }
+    
+    if (y >= 0) {
+      return TAKEN;
+    } else {
+      return NOTTAKEN;
+    }
   }
   else
   {
@@ -330,7 +358,40 @@ void train_predictor(uint32_t pc, uint8_t outcome)
   }
   // Start perceptron training
   else if (bpType == CUSTOM) {
+    // select entry in perceptron table
+    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
+    uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
+    pcBits ^= ghrBits;
 
+    // grabs old 
+    int y_sign = (y > 0) ? 1 : 0;
+
+    if (outcome != y_sign || (abs(y) <= THETA)) {
+      if (ptrons[pcBits][0] < abs(THRESH)) {
+        if(outcome == 1) {
+          ptrons[pcBits][0]++;
+        } else {
+          ptrons[pcBits][0]--;
+        }
+      }
+
+      for (int i = 1; i < P_WEIGHTS; i++) {
+
+        if (ptrons[pcBits][i] < abs(THRESH)) {
+          if (((ghr >> i)&1) == 1) {
+            if(outcome == 1) {
+              ptrons[pcBits][i]++;
+            } else {
+              ptrons[pcBits][i]--;
+            }
+          }
+        }
+      }
+
+    }
+
+    ghr = ghr << 1;
+    ghr = ghr + outcome;
   }
   else
   {
