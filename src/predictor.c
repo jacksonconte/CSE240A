@@ -59,11 +59,12 @@ p = 13 - log n
 */
 
 // ADJUST PERCEPTRON CONSTANTS HERE
-#define P_WEIGHTS 7 // x on graph, also # of ghr bits
-#define P_PCBITS 10 // y on graph
+#define P_WEIGHTS 16 // x on graph, also # of ghr bits
+#define P_PCBITS 9 // y on graph
 #define THRESH 127 // theta threshold
+#define THETA 32
 
-int8_t ptrons[1 << P_PCBITS][P_WEIGHTS];
+int8_t* ptrons [1 << P_PCBITS];//[1 << P_PCBITS][P_WEIGHTS];
 int32_t y_out = 0; 
 
 uint8_t last_local = SN;
@@ -138,6 +139,11 @@ void init_predictor()
     pcIndexBits = P_PCBITS; // use these vars var for consistency in other funcs
     ghistoryBits = P_WEIGHTS;
     uint32_t p_rows = 1 << pcIndexBits;
+
+    for (int i = 0; i < p_rows; i++) 
+    {
+      ptrons[i] = (int8_t*)(malloc(P_WEIGHTS * sizeof(int8_t)));
+    }
 
     // initialize perceptron weights to 0
     for (int i = 0; i < p_rows; i++)
@@ -230,17 +236,16 @@ make_prediction(uint32_t pc)
 
     // xor with GHR
     // mask by index bits
-    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
-    pcBits ^= ghrBits;
+    uint32_t pcBits = (pc^ghr) & ((1 << pcIndexBits) - 1);
 
-    int8_t* ptron = ptrons[pcBits];
-    int32_t result = ptron[0];
+    // int8_t* ptron = ptrons[pcBits];
+    int32_t result = (int32_t)(ptrons[pcBits][0]);
 
     for (int i = 1; i < P_WEIGHTS; i++)
     {
       uint8_t taken = (ghrBits >> i) & 1;
-      result += ptron[i] * (taken ? 1 : -1); //* (1 << i)
+      result += ptrons[pcBits][i] * (taken ? 1 : -1); //* (1 << i)
     }
     y_out = result;
     return (result > 0); // defaults to not taken on tie
@@ -360,16 +365,18 @@ void train_predictor(uint32_t pc, uint8_t outcome)
   else if (bpType == CUSTOM)
   {
     // if t == 1
-    uint32_t pcBits = pc & ((1 << pcIndexBits) - 1);
     uint32_t ghrBits = ghr & ((1 << ghistoryBits) - 1);
-    pcBits ^= ghrBits;
+    uint32_t pcBits = (pc^ghr) & ((1 << pcIndexBits) - 1);
 
     uint8_t sign_y_out = (y_out > 0);
-    if (sign_y_out != outcome || abs(y_out) <= THRESH)
+    if (sign_y_out != outcome || abs(y_out) <= THETA)
      {
-      for (int i = 0; i < P_WEIGHTS; i++)
+      if(ptrons[pcBits][0] < abs(THRESH)) {
+        outcome ? ptrons[pcBits][0]++ : ptrons[pcBits][0]--;
+      }
+      for (int i = 1; i < P_WEIGHTS; i++)
       {
-        uint8_t x_i = ((ghr >> i) & 1)? 1 : -1;
+        uint8_t x_i = ((ghr >> i) & 1)? 1 : 0;
         uint8_t t = (outcome == TAKEN)? 1 : -1;
         ptrons[pcBits][i] += (t * x_i);
       }
